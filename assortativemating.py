@@ -10,13 +10,15 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.pyplot import scatter
 import statsmodels.api as sm
-from scipy.stats import truncnorm
+from scipy.stats import truncnorm, pearsonr
 from scipy.stats import beta
+from itertools import permutations
+import pandas as pd
 #This program simulates a poplation of males and females who have binomially distributed levels of European admixture
 # (represented as a percentage of their genome).
 
 #-------------------------------------------------------------------------
-#-----------------------    Paramaters    --------------------------------
+#-----------------------    Parameters    --------------------------------
 #-------------------------------------------------------------------------
 number_pairs=10 #choose even number
 p=.9
@@ -24,8 +26,15 @@ mu=1/(79+79+31)*(79*.172+79*.256+31*.472)
 sigma=1/(79+79+31)*(79*(.134**2+.172)+79*(.142**2+.256)+31*(.158**2+.472))-mu**2
 alpha=((1-mu)/sigma**2-1/mu)*mu**2
 beta=alpha*(1/mu-1)
-encounters=number_pairs  #must be less than popsize
+#encounters=10 #must be less than/equal to popsize
 Males_choose=True  #If false, then females propose to males
+Assort=True
+Uniform=False
+Random=False
+num_runs=2
+show_plot3=False
+mult_gen=True #use input to control this
+num_generations=100
 #-----------------------------------------------------------------------------------
 #-----------------------    Init Population Functions    ---------------------------
 #-----------------------------------------------------------------------------------
@@ -67,210 +76,275 @@ def init_pop_binom(popsize,mean):  #This function produces a group of males and 
         females.append([i,a[0]])
     return males, females
 
+def init_mult_gen(males,females,final_choice):
+    new_males=[]
+    new_females=[]
+    for m in range(len(males)):
+        mom=np.random.randint(0,len(females)-1)
+        dad=final_choice[mom]
+        new_males.append([m,(males[dad][1]+females[mom][1])/2])
+        mom=np.random.randint(0,len(females)-1)
+        dad=final_choice[mom]
+        new_females.append([m,(males[dad][1]+females[mom][1])/2])
+    return new_males,new_females
+
 #-------------------------------------------------------------------------------
 #-----------------------    Interaction Functions    ---------------------------
 #-------------------------------------------------------------------------------     
      
-def remove_multiples(pref_list,tag):
-    temp_list=[]
-    for mate in pref_list[tag]:
-        if mate not in temp_list: temp_list.append(mate)
-    pref_list[tag]=temp_list
-    return pref_list[tag]
-
-    
-def show_multiples(pref_list):
-    items_to_remove=[]
-    for i in range(len(pref_list)):
-        for j in range(len(pref_list)):
-            if pref_list[i]==pref_list[j] and i!=j: items_to_remove.append(pref_list[j])
-    print('items to remove = ',items_to_remove)
-#    for index in range(len(items_to_remove)): pref_list.remove(items_to_remove[index])
-
-def simple_build_preferences(males,females):
-    male_pref_list=[]
-    female_pref_list=[]
-#    males.sort(key=itemgetter(1))
-#    females.sort(key=itemgetter(1))
-    for f in range(len(females)): 
-        female_pref_list.append(sorted(males,key=itemgetter(1)))
-        male_pref_list.append(sorted(females,key=itemgetter(1)))
-    #for i in range(len(males)):
-     #   males.sort(key=itemgetter(1))
-      #  females.sort(key=itemgetter(1))
-       # male_pref_list.append(females)
-        #female_pref_list.append(males)
-    return male_pref_list,female_pref_list
-
-def build_preferences(males,females,encounters):               #build preference list from N encounters  We have to fix this to get the rpeferences ordering right
+def build_preferences_assortative(males,females,encounters):
     male_pref_list=[[] for i in range(len(males))]
     female_pref_list=[[] for i in range(len(females))]
-    for i in range(encounters):                             #Here we assign partners in the random encounters
-        male_perm=np.random.permutation(males).tolist()
-        for f in range(len(females)): 
-            female_pref_list[f].append(male_perm[f])
-            ind=int(male_perm[f][0])
-            male_pref_list[ind].append(females[f])
-    for m in range(len(males)):
-        extra_females=[]
-        male_pref_list[m]=remove_multiples(male_pref_list,m)
-        male_pref_list[m].sort(key=itemgetter(1)) 
-#        show_multiples(male_pref_list[m])
-#        print('male ',m,' length is ',len(male_pref_list[m]))
-        for female in females:
-            if female not in male_pref_list[m]: extra_females.append(female)
-        unencountered_females=np.random.permutation(extra_females).tolist()
-        for mate in unencountered_females: male_pref_list[m].append(mate)
-#        print('length is ',str(len(male_pref_list[m])))
-    for f in range(len(females)):
-        extra_males=[]
-        female_pref_list[f]=remove_multiples(female_pref_list,f)
-        female_pref_list[f].sort(key=itemgetter(1))
-#        show_multiples(female_pref_list[f])
-#       print('female ',f,' length is ',len(female_pref_list[f]))
-        for male in males:
-            if male not in female_pref_list[f]: extra_males.append(male)
-        unencountered_males=np.random.permutation(extra_males).tolist()
-        #if len(unencountered_males)+len(female_pref_list[f])!=ceil(popsize/2):
-            #print('size problem at ',f)
-            #print('unenc + enc = ',len(unencountered_males),' + ',len(female_pref_list[f]))
-        for mate in unencountered_males: female_pref_list[f].append(mate)
+    for ind, male in enumerate(males):
+        meetings=[[] for i in range(encounters)]
+        sample=np.random.choice(number_pairs,encounters,replace=False).tolist()
+        for index, element in enumerate(meetings):
+            element.append(sample[index])
+            element.append(abs(male[1]-females[sample[index]][1]))
+        meetings.sort(key=itemgetter(1),reverse=False)
+        for item in meetings: male_pref_list[ind].append(females[item[0]])
+        female_index=[n for n in range(number_pairs) if n not in sample]
+        female_index=np.random.permutation(female_index).tolist()
+        for index in female_index: male_pref_list[ind].append(females[index])
+    for ind, female in enumerate(females):
+        meetings=[[] for i in range(encounters)]
+        sample=np.random.choice(number_pairs,encounters,replace=False).tolist()
+        for index, element in enumerate(meetings):
+            element.append(sample[index])
+            element.append(abs(female[1]-males[sample[index]][1]))
+        meetings.sort(key=itemgetter(1),reverse=False)
+        for item in meetings: female_pref_list[ind].append(males[item[0]])
+        male_index=[n for n in range(number_pairs) if n not in sample]
+        male_index=np.random.permutation(male_index).tolist()
+        for index in male_index: female_pref_list[ind].append(males[index])
     return male_pref_list,female_pref_list
+
+def build_preferences_random(males,females,encounters):
+    male_pref_list=[[] for i in range(len(males))]
+    female_pref_list=[[] for i in range(len(females))]
+    for ind, male in enumerate(males):
+        meetings=np.random.choice(number_pairs,encounters,replace=False).tolist()
+        for item in meetings: male_pref_list[ind].append(females[item])
+        female_index=[n for n in range(number_pairs) if n not in meetings]
+        female_index=np.random.permutation(female_index).tolist()
+        for index in female_index: male_pref_list[ind].append(females[index])
+    for ind, female in enumerate(females):
+        meetings=np.random.choice(number_pairs,encounters,replace=False).tolist()
+        for item in meetings: female_pref_list[ind].append(males[item])
+        male_index=[n for n in range(number_pairs) if n not in meetings]
+        male_index=np.random.permutation(male_index).tolist()
+        for index in male_index: female_pref_list[ind].append(males[index])
+    return male_pref_list,female_pref_list
+
+def build_preferences_uniform(males,females,encounters):
+    male_pref_list=[[] for i in range(len(males))]
+    female_pref_list=[[] for i in range(len(females))]
+    for ind, male in enumerate(males):
+        meetings=np.random.choice(number_pairs,encounters,replace=False).tolist()
+        for item in meetings: male_pref_list[ind].append(females[item])
+        male_pref_list[ind].sort(key=itemgetter(1),reverse=True)                   
+        female_index=[n for n in range(number_pairs) if n not in meetings]
+        female_index=np.random.permutation(female_index).tolist()
+        for index in female_index: male_pref_list[ind].append(females[index])
+    for ind, female in enumerate(females):
+        meetings=np.random.choice(number_pairs,encounters,replace=False).tolist()
+        for item in meetings: female_pref_list[ind].append(males[item])
+        female_pref_list[ind].sort(key=itemgetter(1),reverse=True)
+        male_index=[n for n in range(number_pairs) if n not in meetings]
+        male_index=np.random.permutation(male_index).tolist()
+        for index in male_index: female_pref_list[ind].append(males[index])
+    return male_pref_list,female_pref_list
+#Important: This function sorts highest preference from right to left so that the preferences can be popped in the Gale Shapley function.        
+
+def gale_shapley(leftover_males,males,females,Males_choose,male_pref_list,female_pref_list,suitors_list):
+    for m, male in enumerate(males):
+        if male in leftover_males:
+            proposal=male_pref_list[m].pop()
+            suitors_list[proposal[0]].append(m)
+    for female,proposals in enumerate(suitors_list):
+        if proposals:
+            suitors_indices=[female_pref_list[female].index(males[m]) for m in proposals]
+            #print('suitors indices = ',suitors_indices)
+            suitors_list[female]=[female_pref_list[female][max(suitors_indices)][0]]
+    check_list=[y for x in suitors_list for y in x]
+    leftover_males=[male for male in males if male[0] not in check_list]
+    if leftover_males:
+        return gale_shapley(leftover_males,males,females,Males_choose,male_pref_list,female_pref_list,suitors_list)
+    else:
+        return suitors_list
+
+
+def iterative_gale_shapley(leftover_males,males,females,Males_choose,male_pref_list,female_pref_list,suitors_list):
+    max_iterations=number_pairs**2-2*number_pairs+2    
+    for i in range(max_iterations):
+        for m, male in enumerate(males):
+            if male in leftover_males:
+                proposal=male_pref_list[m].pop()
+                suitors_list[proposal[0]].append(m)
+        for female,proposals in enumerate(suitors_list):
+            if proposals:
+                suitors_indices=[female_pref_list[female].index(males[m]) for m in proposals]
+                suitors_list[female]=[female_pref_list[female][max(suitors_indices)][0]]
+        check_list=[y for x in suitors_list for y in x]
+        leftover_males=[male for male in males if male[0] not in check_list]
+        if not leftover_males: break
+    return suitors_list
 #This function produces a specified number of random encounters and then
 #determines each individuals preferences across those encounters.  All
 # the individuals not encountered will be ranked equally at the end of the 
 #preference list.
 
-#Also need to deal with the fact that a male may run out of the prefered females and must choose at random from females that have not been encountered.
-           
-def Top_choices(suitors_list,female_pref_list):
-    global best_suitors
-    best_suitors=[[] for i in range(len(female_pref_list))]
-    for s,suitor in enumerate(suitors_list):
-        if suitor:
-            for mate in suitor: 
-                if mate not in female_pref_list[s]: print('item error for ',mate)
-            index_list=[female_pref_list[s].index(mate) for mate in suitor]  #list of all indices for suitors of a given female
-            best_suitors[s].append(female_pref_list[s][max(index_list)])  #find suitor with the highest index
-    #print(best_suitors)
-    return best_suitors
-
-     
-def Gale_Shapley(males,females,Males_choose,male_pref_list,female_pref_list,suitors_list):
-    for m,male in enumerate(males):
-        proposal=male_pref_list[m].pop()
-        suitors_list[int(proposal[0])].append(male)
-        #print(male)
-    suitors_list=Top_choices(suitors_list,female_pref_list)
-    unproposed=[suitor for suitor in suitors_list if not suitor]
-    print(unproposed)
-    if unproposed:
-        leftover_males=[male for male in males if male not in suitors_list]
-        return Gale_Shapley(leftover_males,females,Males_choose,male_pref_list,female_pref_list,suitors_list)
-    else:
-        return suitors_list
-                    
-
 #------------------------------------------------------------------------
 #-----------------------    Simulation    ---------------------------
 #-------------------------------------------------------------------------    
 
-#males,females=init_pop_normal(mu,sigma,number_pairs)
-#males,females=init_pop_beta(mu,sigma,number_pairs)
-male_pref_list,female_pref_list=build_preferences(males,females,encounters)
-male_pref_list,female_pref_list=simple_build_preferences(males,females)
-suitors_list=[[] for i in range(len(female_pref_list))]
-male_final_choices=Gale_Shapley(males,females,Males_choose,male_pref_list,female_pref_list,suitors_list)
-male_final_choices=[item for place in male_final_choices for item in place]
-male_admix=[male[1] for male in male_final_choices]
-female_admix=[female[1] for female in females]
-pairs =[[male[0],females[male_final_choices.index(male)]] for male in male_final_choices]
-
-#define plot size in inches (width, height) & resolution(DPI)
-plt.figure(figsize=(5, 5), dpi=100)
-plt.rc("font", size=16)
-results = sm.OLS(male_admix,sm.add_constant(female_admix)).fit()
-scatter(female_admix,male_admix)
-X_plot = np.linspace(0,.1,1.0)
-line=plt.plot(X_plot, X_plot*results.params[0],'-',linewidth=2.0)
-fit = np.polyfit(female_admix,male_admix,1)
-fit_fn = np.poly1d(fit) 
-plt.plot(female_admix,male_admix, 'yo', female_admix, fit_fn(female_admix), '--k')
-plt.ylabel('male admixture')
-plt.xlabel('female admixture')
-plt.axis([0, 1, 0, 1])
-plt.show()
-figsize=(1, 1)
 
 
-#def Gale_shapley(males,females,Males_choose,male_pref_list,female_pref_list,suitors_list):     #Use Gale Shapley algorithm to pair individuals
-#    for m in range(len(males)): 
-#        female_ind=male_pref_list[m].pop()
-#        ind=int(female_ind[0])
-#        suitors_list[ind].append(m)        
-#    for f in range(len(female_pref_list)):
-#        if not suitors_list[f]: suitors_list[f]=suitors_list[f]
-#        else: suitors_list[f]=check_suitors(suitors_list,female_pref_list,f)
-#    leftover_males=[]
-#    for m in range(len(males)):
-#        if m not in suitors_list: leftover_males.append(m)
-#    unproposed=0
-#    for female in suitors_list: 
-#        if not female: unproposed+=1
-#    if unproposed>0: Gale_shapley(leftover_males,females,Males_choose,male_pref_list,female_pref_list,suitors_list)
-#    else: 
-#        return male_final_choices
+def simulation(Assort,Uniform,Random,number_pairs,encounters,mu,num_runs,show_plots):
+    corrs=0
+    for t in range(num_runs):    
+        males,females=init_pop_beta(mu,sigma,number_pairs)
+        #males,females=init_pop_normal(mu,sigma,number_pairs)
+        if Uniform==True: male_pref_list,female_pref_list=build_preferences_uniform(males,females,encounters)
+        if Assort==True: male_pref_list,female_pref_list=build_preferences_assortative(males,females,encounters)
+        if Random==True: male_pref_list,female_pref_list=build_preferences_random(males,females,encounters)
+        for ind in range(len(male_pref_list)): male_pref_list[ind]=list(reversed(male_pref_list[ind]))
+        for ind in range(len(female_pref_list)): female_pref_list[ind]=list(reversed(female_pref_list[ind]))
+        suitors_list=[[] for i in range(number_pairs)]
+        counter=0
+        leftover_males=males
+        final_choice=iterative_gale_shapley(leftover_males,males,females,Males_choose,male_pref_list,female_pref_list,suitors_list)
+        #final_choice=gale_shapley(leftover_males,males,females,Males_choose,male_pref_list,female_pref_list,suitors_list)
+        final_choice=[y for x in final_choice for y in x]
+        male_admix=[males[i][1] for i in final_choice]
+        female_admix=[female[1] for female in females]
+        #define plot size in inches (width, height) & resolution(DPI)
+        if show_plots==True:
+            plt.figure(figsize=(5, 5), dpi=100)
+            plt.rc("font", size=16)
+            results = sm.OLS(male_admix,sm.add_constant(female_admix)).fit()
+            scatter(female_admix,male_admix)
+            X_plot = np.linspace(0,.1,1.0)
+            line=plt.plot(X_plot, X_plot*results.params[0],'-',linewidth=2.0)
+            fit = np.polyfit(female_admix,male_admix,1)
+            fit_fn = np.poly1d(fit) 
+            plt.plot(female_admix,male_admix, 'yo', female_admix, fit_fn(female_admix), '--k')
+            plt.ylabel('male admixture')
+            plt.xlabel('female admixture')
+            plt.axis([0, 1, 0, 1])
+            plt.show()
+            figsize=(1, 1)
+            print(results.summary())
+        corr_mat=np.corrcoef(male_admix,female_admix)
+        corrs+=corr_mat[0,1]/num_runs
+    #print('Correlation for Assort= ',str(Assort),', Uniform= ',str(Uniform),', Random= ',str(Random),' = ',str(corrs))
+    return corrs
+    
+def simulation_mult_generations(Assort,Uniform,Random,number_pairs,encounters,mu,num_runs,show_plots,num_generations):
+    data1=[] 
+    data2=[]      
+    for t in range(num_runs):
+        corrs_vector=[]
+        mean_admix=[]
+        males,females=init_pop_beta(mu,sigma,number_pairs)
+        for gen in range(num_generations):
+            if gen>0: males,females=init_mult_gen(males,females,final_choice)
+            if Uniform==True: male_pref_list,female_pref_list=build_preferences_uniform(males,females,encounters)
+            if Assort==True: male_pref_list,female_pref_list=build_preferences_assortative(males,females,encounters)
+            if Random==True: male_pref_list,female_pref_list=build_preferences_random(males,females,encounters)
+            for ind in range(len(male_pref_list)): male_pref_list[ind]=list(reversed(male_pref_list[ind]))
+            for ind in range(len(female_pref_list)): female_pref_list[ind]=list(reversed(female_pref_list[ind]))
+            suitors_list=[[] for i in range(number_pairs)]
+            counter=0
+            leftover_males=males
+            final_choice=iterative_gale_shapley(leftover_males,males,females,Males_choose,male_pref_list,female_pref_list,suitors_list)
+            #final_choice=gale_shapley(leftover_males,males,females,Males_choose,male_pref_list,female_pref_list,suitors_list)
+            final_choice=[y for x in final_choice for y in x]
+            male_admix=[males[i][1] for i in final_choice]
+            female_admix=[female[1] for female in females]
+            corr_mat=np.corrcoef(male_admix,female_admix)
+            corrs_vector.append(corr_mat[0,1])
+            mean_admix.append(np.mean(male_admix+female_admix))
+        data1.append(corrs_vector)
+        data2.append(mean_admix)
+        #corrs+=corr_mat[0,1]/num_runs
+    #print('Correlation for Assort= ',str(Assort),', Uniform= ',str(Uniform),', Random= ',str(Random),' = ',str(corrs))
+    return data1,data2    
+  
+  
+#-------------------------------------------------------------------------
+#----------------------           Main          --------------------------
+#-------------------------------------------------------------------------
+#mult_gen=bool(input('Multipe generations results? (True/False) \n'))
+#single_gen=bool(input('Single generation results? (True/False) \n))
+
+#f single_gen==True:
+assort_corrs=[]
+for i in range(number_pairs):
+    Assort=True
+    Uniform=False
+    Random=False
+    encounters=i+1  
+    corrs=simulation(Assort,Uniform,Random,number_pairs,encounters,mu,num_runs,show_plots)    
+    assort_corrs.append(corrs) 
+uniform_corrs=[]
+for i in range(number_pairs):
+    Assort=False
+    Uniform=True
+    Random=False 
+    encounters=i+1
+    corrs=simulation(Assort,Uniform,Random,number_pairs,encounters,mu,num_runs,show_plots)    
+    uniform_corrs.append(corrs)
+d={'assort':assort_corrs,'uniform':uniform_corrs}
+df=pd.DataFrame(data=d)
+df.plot(kind='line',title='mean corr. vs. sample size (single generation)')
+
+
+encounters=number_pairs
+if mult_gen==True:
+    #num_generations=int(input('number of generations \n'))
+    Assort=False
+    Uniform=True
+    Random=False 
+    cdata,mdata=simulation_mult_generations(Assort,Uniform,Random,number_pairs,encounters,mu,num_runs,show_plots,num_generations)
+    cdata=np.transpose(cdata)
+    mdata=np.transpose(mdata)
+    meancorr=[np.mean(cdata[i]) for i in range(len(cdata))]
+    meanadmix=[np.mean(mdata[i]) for i in range(len(mdata))]
+    column_names=['run'+str(i+1) for i in range(len(cdata[0]))]
+    unicdf=pd.DataFrame(data=cdata,columns=column_names)
+    unimdf=pd.DataFrame(data=mdata,columns=column_names)
+    unimeancdf=pd.DataFrame(data=meancorr)
+    unimeanmdf=pd.DataFrame(data=meanadmix)    
+    Assort=True
+    Uniform=False
+    Random=False 
+    cdata,mdata=simulation_mult_generations(Assort,Uniform,Random,number_pairs,encounters,mu,num_runs,show_plots,num_generations)
+    cdata=np.transpose(cdata)
+    mdata=np.transpose(mdata)
+    meancorr=[np.mean(cdata[i]) for i in range(len(cdata))]
+    meanadmix=[np.mean(mdata[i]) for i in range(len(mdata))]
+    column_names=['run'+str(i+1) for i in range(len(cdata[0]))]
+    asscdf=pd.DataFrame(data=cdata,columns=column_names)
+    assmdf=pd.DataFrame(data=mdata,columns=column_names)
+    assmeancdf=pd.DataFrame(data=meancorr)
+    assmeanmdf=pd.DataFrame(data=meanadmix) 
+    
+unicdf.plot(title='corr vs gen (uniform)',ylim=[0,1])
+unimdf.plot(title='mean admix (uniform)',ylim=[0,1])
+asscdf.plot(title='corr vs gen (assort)',ylim=[0,1])
+assmdf.plot(title='mean admix (assort)',ylim=[0,1])
+unimeancdf.plot(title='mean corr vs. gen (uniform)',ylim=[0,1])
+unimeanmdf.plot(title='mean admix vs. gen (uniform)',ylim=[0,1])
+assmeancdf.plot(title='mean corr vs. gen (assort)',ylim=[0,1])
+assmeanmdf.plot(title='mean admix vs. gen (assort)',ylim=[0,1])
+
  
 
-#def check_suitors(suitors_list,female_pref_list,f):
-#    index_list=[]
-#    for suitor in suitors_list[f]:
-#        #print('the suitors are ',suitor)
-#        #print('the pref list is ',female_pref_list[f])
-#        #if mate not in female_pref_list[f]: print('suitors are ',suitors_list[f])
-#        if suitor not in female_pref_list[f]: print(suitor,'not in our list for female ',f)
-#        index_list.append(female_pref_list[f].index(suitor))
-#    best=female_pref_list[f][int(max(index_list))]
-#    #print('best is ',best)
-#    return best       
-        
-       
 
-        
-#def Gale_shapley(males,females,Males_choose,male_pref_list,female_pref_list,suitors_list,recursion_counter):     #Use Gale Shapley algorithm to pair individuals
-#    recursion_counter+=1
-#    print('recursion counter= ',recursion_counter)    
-#    male_final_choices=[]
-#    #print('length of suitors_list is ',len(suitors_list))
-#    for male in males:
-#        male_final_choices.append([]) #building the list this way assumes equal number of men and women
-#        female_preferred=male_pref_list[male[0]].pop()
-#        ind=int(female_preferred[0])
-# #       if len(males[m])<2: print('here is issue',males[m])
-#        suitors_list[ind].append(male) 
-#    for suitor in suitors_list: print('suitor is ',suitor)
-#    for f in range(len(female_pref_list)):
-#        if not suitors_list[f]: suitors_list[f]=suitors_list[f]
-#        else: 
-#            #print('calling check_suitors')
-#            #print('index is ',f)
-#            best=check_suitors(suitors_list,female_pref_list,f)
-#            for i in suitors_list[f]: suitors_list[f].remove(i)
-#            suitors_list[f].append(best)
-#    leftover_males=[]
-#    for m in range(len(males)):
-#        counter=0
-#        for suitor in suitors_list:
-#            if males[m] in suitor: counter+=1
-#        if counter==0: leftover_males.append(males[m])
-#    unproposed=0
-#    for female in suitors_list: 
-#        if not female: unproposed+=1
-#    if recursion_counter>10: sys.exit()
-#    #print('length of suitors_list is ',len(suitors_list))
-#    if unproposed>0:
-#        print('left overs are ',leftover_males)
-#        Gale_shapley(leftover_males,females,Males_choose,male_pref_list,female_pref_list,suitors_list,recursion_counter)
-#    else:
-#        male_final_choices=suitors_list
-#        return male_final_choices           
+
+    
+
+
+
+ 
